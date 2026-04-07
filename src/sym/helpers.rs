@@ -41,7 +41,8 @@ pub fn modulo_10_checksum(data: &[u8], even_start: bool) -> u8 {
         evens *= 3;
     }
 
-    match 10 - ((odds + evens) % 10) {
+    // longer barcodes can cause and u8 overflow
+    match 10 - ((odds as u16 + evens as u16) % 10) as u8 {
         10 => 0,
         n => n,
     }
