@@ -15,6 +15,8 @@ pub enum Error {
     Generate,
     /// Invalid checksum.
     Checksum,
+    /// Invalid narrow-to-wide ratio
+    NarrowToWideRatio,
 }
 
 /// Alias-type for Result<T, barcoders::error::Error>.
@@ -27,6 +29,7 @@ impl fmt::Display for Error {
             Error::Length => write!(f, "Barcode data length is invalid"),
             Error::Generate => write!(f, "Could not generate barcode data"),
             Error::Checksum => write!(f, "Invalid checksum"),
+            Error::NarrowToWideRatio => write!(f, "Invalid narrow-to-wide ratio, can only be 2 or 3"),
         }
     }
 }

@@ -7,6 +7,7 @@
 //!
 //! Most of the time you will want to use the interleaved barcode over the standard option.
 
+use crate::error::Error;
 use crate::error::Result;
 use crate::sym::helpers;
 use crate::sym::Parse;
@@ -32,12 +33,12 @@ const STF_STOP: [u8; 8] = [1, 1, 0, 1, 0, 1, 1, 0];
 pub enum TF {
     /// The standard 2-of-5 barcode type.
     Standard(Vec<u8>),
-    /// The interleaved 2-of-5 barcode type.
-    Interleaved(Vec<u8>),
+    /// The interleaved 2-of-5 barcode type. Defaults to a narrow-to-wide ratio of 3.
+    Interleaved(Vec<u8>, u8),
 }
 
 impl TF {
-    /// Creates a new ITF barcode.
+    /// Creates a new ITF barcode with the default narrow-to-wide ratio of 3.
     /// If the length of the given data is odd, a checksum value will be computed and appended to
     /// the data for encoding.
     ///
@@ -55,7 +56,33 @@ impl TF {
                 digits.push(check_digit);
             }
 
-            TF::Interleaved(digits)
+            TF::Interleaved(digits, 3)
+        })
+    }
+
+    /// Creates a new ITF barcode.
+    /// If the length of the given data is odd, a checksum value will be computed and appended to
+    /// the data for encoding.
+    ///
+    /// Returns Result<TF::Interleaved, Error> indicating parse success.
+    pub fn interleaved_with_narrow_to_wide_ratio<T: AsRef<str>>(data: T, narrow_to_wide_ratio: u8) -> Result<TF> {
+        match narrow_to_wide_ratio {
+            2 | 3 => {},
+            _ => return Err(Error::NarrowToWideRatio),
+        }
+        TF::parse(data.as_ref()).map(|d| {
+            let mut digits: Vec<u8> = d
+                .chars()
+                .map(|c| c.to_digit(10).expect("Unknown character") as u8)
+                .collect();
+            let checksum_required = digits.len() % 2 == 1;
+
+            if checksum_required {
+                let check_digit = helpers::modulo_10_checksum(&digits[..], false);
+                digits.push(check_digit);
+            }
+
+            TF::Interleaved(digits, narrow_to_wide_ratio)
         })
     }
 
@@ -74,11 +101,18 @@ impl TF {
 
     fn raw_data(&self) -> &[u8] {
         match *self {
-            TF::Standard(ref d) | TF::Interleaved(ref d) => &d[..],
+            TF::Standard(ref d) | TF::Interleaved(ref d, _) => &d[..],
         }
     }
 
-    fn interleave(&self, bars: u8, spaces: u8) -> Vec<u8> {
+    fn narrow_to_wide_ratio(&self) -> u8 {
+        match *self {
+            TF::Standard(_) => 0,
+            TF::Interleaved(_, narrow_to_wide_ratio) => narrow_to_wide_ratio,
+        }
+    }
+
+    fn interleave(&self, bars: u8, spaces: u8, narrow_to_wide_ratio: u8) -> Vec<u8> {
         let bwidths = WIDTHS[bars as usize].chars();
         let swidths = WIDTHS[spaces as usize].chars();
         let mut encoding: Vec<u8> = vec![];
@@ -86,7 +120,7 @@ impl TF {
         for (b, s) in bwidths.zip(swidths) {
             for &(c, i) in &[(b, 1), (s, 0)] {
                 match c {
-                    'W' => encoding.extend([i; 3].iter().cloned()),
+                    'W' => (0..narrow_to_wide_ratio).for_each(|_| encoding.push(i)),
                     _ => encoding.push(i),
                 }
             }
@@ -126,7 +160,7 @@ impl TF {
         let weaves: Vec<Vec<u8>> = self
             .raw_data()
             .chunks(2)
-            .map(|c| self.interleave(c[0], c[1]))
+            .map(|c| self.interleave(c[0], c[1], self.narrow_to_wide_ratio()))
             .collect();
 
         helpers::join_iters(weaves.iter())
@@ -139,7 +173,7 @@ impl TF {
             TF::Standard(_) => {
                 helpers::join_slices(&[&STF_START[..], &self.stf_payload()[..], &STF_STOP[..]][..])
             }
-            TF::Interleaved(_) => {
+            TF::Interleaved(_, _) => {
                 helpers::join_slices(&[&ITF_START[..], &self.itf_payload()[..], &ITF_STOP[..]][..])
             }
         }
@@ -194,6 +228,20 @@ mod tests {
     }
 
     #[test]
+    fn invalid_nw_ratio_itf1() {
+        let itf = TF::interleaved_with_narrow_to_wide_ratio("1234er123412".to_string(), 0);
+
+        assert_eq!(itf.err().unwrap(), Error::NarrowToWideRatio);
+    }
+
+    #[test]
+    fn invalid_nw_ratio_itf2() {
+        let itf = TF::interleaved_with_narrow_to_wide_ratio("1234er123412".to_string(), 5);
+
+        assert_eq!(itf.err().unwrap(), Error::NarrowToWideRatio);
+    }
+
+    #[test]
     fn invalid_data_stf() {
         let stf = TF::standard("WORDUP".to_string());
 
@@ -214,6 +262,17 @@ mod tests {
         assert_eq!(
             collapse_vec(itf.encode()),
             "10101110100010101110001110111010001010001110100011100010101010100011100011101101"
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn itf_encode_nw2() {
+        let itf = TF::interleaved_with_narrow_to_wide_ratio("1234567".to_string(), 2).unwrap(); // Check digit: 0
+
+        assert_eq!(
+            collapse_vec(itf.encode()),
+            "1010110100101011001101101001010011010011001010101010011001101101"
                 .to_string()
         );
     }
